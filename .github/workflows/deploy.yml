@@ -1,0 +1,67 @@
+name: Deploy Email Microservice to AWS EC2
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup SSH Key
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
+        chmod 600 ~/.ssh/ec2_key.pem
+        ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+    
+    - name: Deploy to EC2
+      run: |
+        # Python dosyalarini EC2'ye kopyala
+        scp -i ~/.ssh/ec2_key.pem -r \
+          main.py requirements.txt .env \
+          ubuntu@${{ secrets.EC2_HOST }}:~/email-microservice/
+        
+        # EC2'de servisi yeniden baslat
+        ssh -i ~/.ssh/ec2_key.pem ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+          echo "=========================================="
+          echo " Email Microservice Deployment"
+          echo "=========================================="
+          
+          cd ~/email-microservice
+          
+          # Eski servisi durdur
+          echo "Eski servis durduruluyor..."
+          pkill -f "uvicorn main:app" || true
+          sleep 2
+          
+          # Bagimliliklari kur
+          echo "Bagimliliklar kuruluyor..."
+          pip3 install -r requirements.txt --quiet
+          
+          # Servisi baslat (nohup ile arka planda)
+          echo "Servis baslatiliyor..."
+          nohup python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 > ~/email.log 2>&1 &
+          
+          # Kontrol
+          sleep 3
+          if pgrep -f "uvicorn main:app" > /dev/null; then
+            echo "========================================"
+            echo " Deployment BASARILI!"
+            echo " Servis: http://${{ secrets.EC2_HOST }}:8000"
+            echo "========================================"
+          else
+            echo "HATA: Servis baslatilamadi!"
+            cat ~/email.log
+            exit 1
+          fi
+        EOF
+    
+    - name: Cleanup
+      if: always()
+      run: rm -f ~/.ssh/ec2_key.pem
