@@ -13,48 +13,49 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Setup SSH Key
+    - name: EC2 known_hosts ekle
       run: |
         mkdir -p ~/.ssh
-        echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
-        chmod 600 ~/.ssh/ec2_key.pem
         ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
     
-    - name: Deploy to EC2
+    - name: EC2'ye baglan ve deploy et
       run: |
-        # Python dosyalarini EC2'ye kopyala
-        scp -i ~/.ssh/ec2_key.pem -r \
-          main.py requirements.txt .env \
-          ubuntu@${{ secrets.EC2_HOST }}:~/email-microservice/
+        echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
+        chmod 600 ~/.ssh/ec2_key.pem
         
-        # EC2'de servisi yeniden baslat
-        ssh -i ~/.ssh/ec2_key.pem ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
-          echo "=========================================="
-          echo " Email Microservice Deployment"
-          echo "=========================================="
+        ssh -i ~/.ssh/ec2_key.pem ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+          set -e
           
-          cd ~/email-microservice
+          # Klasor yoksa olustur ve git clone yap
+          if [ ! -d "mail-service" ]; then
+            git clone https://github.com/omerdikmen13/email-service.git mail-service
+          fi
           
-          # Eski servisi durdur
-          echo "Eski servis durduruluyor..."
-          pkill -f "uvicorn main:app" || true
-          sleep 2
+          cd mail-service
+          git pull origin main
+          
+          # Python venv olustur
+          python3 -m venv venv || true
+          source venv/bin/activate
           
           # Bagimliliklari kur
-          echo "Bagimliliklar kuruluyor..."
-          pip3 install -r requirements.txt --quiet
+          pip install --upgrade pip
+          pip install -r requirements.txt
           
-          # Servisi baslat (nohup ile arka planda)
-          echo "Servis baslatiliyor..."
-          nohup python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 > ~/email.log 2>&1 &
+          # Eski uvicorn'u durdur
+          pkill -f uvicorn || true
+          
+          # Yeni uvicorn'u baslat
+          nohup python -m uvicorn main:app --host 0.0.0.0 --port 8000 > ~/email.log 2>&1 &
+          
+          sleep 3
           
           # Kontrol
-          sleep 3
-          if pgrep -f "uvicorn main:app" > /dev/null; then
-            echo "========================================"
-            echo " Deployment BASARILI!"
+          if pgrep -f uvicorn > /dev/null; then
+            echo "=========================================="
+            echo " Email Microservice Deployment BASARILI!"
             echo " Servis: http://${{ secrets.EC2_HOST }}:8000"
-            echo "========================================"
+            echo "=========================================="
           else
             echo "HATA: Servis baslatilamadi!"
             cat ~/email.log
