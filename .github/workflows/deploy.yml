@@ -13,19 +13,24 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: EC2 known_hosts ekle
-      run: |
-        mkdir -p ~/.ssh
-        ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
-    
     - name: Setup SSH Key
       run: |
+        mkdir -p ~/.ssh
         echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
         chmod 600 ~/.ssh/ec2_key.pem
+        ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
     
     - name: EC2'ye baglan ve deploy et
       run: |
         ssh -T -i ~/.ssh/ec2_key.pem -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'ENDSSH'
+        
+        echo "=========================================="
+        echo " Python ve Bagimliliklar Kuruluyor..."
+        echo "=========================================="
+        
+        # Python kurulumu
+        sudo apt-get update -y
+        sudo apt-get install -y python3 python3-pip python3-venv git
         
         # Klasor yoksa olustur ve git clone yap
         if [ ! -d "mail-service" ]; then
@@ -35,26 +40,23 @@ jobs:
         cd mail-service
         git pull origin main
         
-        # Python venv olustur
-        python3 -m venv venv || true
-        source venv/bin/activate
-        
-        # Bagimliliklari kur
-        pip install --upgrade pip
-        pip install -r requirements.txt
+        # Bagimliliklari direkt kur (venv olmadan)
+        pip3 install --user -r requirements.txt
         
         # Eski uvicorn'u durdur
         pkill -f uvicorn || true
+        sleep 2
         
         # Yeni uvicorn'u baslat
-        nohup python -m uvicorn main:app --host 0.0.0.0 --port 8000 > ~/email.log 2>&1 &
+        nohup python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 > ~/email.log 2>&1 &
         
-        sleep 3
+        sleep 5
         
         # Kontrol
         if pgrep -f uvicorn > /dev/null; then
           echo "=========================================="
           echo " Email Microservice Deployment BASARILI!"
+          echo " Servis: http://${{ secrets.EC2_HOST }}:8000"
           echo "=========================================="
         else
           echo "HATA: Servis baslatilamadi!"
